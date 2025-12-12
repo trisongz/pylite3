@@ -62,8 +62,31 @@ cdef extern from "lite3.h":
     # Writer API
     # Using macros from header, so signature must match macro (no key_data passed explicitly)
     int lite3_init_obj(unsigned char *buf, size_t *out_buflen, size_t bufsz)
+    int lite3_init_arr(unsigned char *buf, size_t *out_buflen, size_t bufsz)
+    
+    # Object Setters
+    int lite3_set_null(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key)
+    int lite3_set_bool(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, bint value)
     int lite3_set_i64(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, int64_t value)
+    int lite3_set_f64(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, double value)
+    int lite3_set_bytes(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, const unsigned char *bytes, size_t bytes_len)
     int lite3_set_str(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, const char *str)
+    # Note: Using set_str_n is more efficient if length is known, but requires exposing it.
+    
+    int lite3_set_obj(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, size_t *out_ofs)
+    int lite3_set_arr(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *key, size_t *out_ofs)
+
+    # Array Appenders
+    int lite3_arr_append_null(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz)
+    int lite3_arr_append_bool(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, bint value)
+    int lite3_arr_append_i64(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, int64_t value)
+    int lite3_arr_append_f64(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, double value)
+    int lite3_arr_append_bytes(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const unsigned char *bytes, size_t bytes_len)
+    int lite3_arr_append_str(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, const char *str)
+    
+    int lite3_arr_append_obj(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, size_t *out_ofs)
+    int lite3_arr_append_arr(unsigned char *buf, size_t *inout_buflen, size_t ofs, size_t bufsz, size_t *out_ofs)
+
 
 cdef class Lite3Object:
     """
@@ -314,45 +337,106 @@ def loads(data, bint recursive=False):
         return obj.to_python()
     return obj
 
+cdef int _dumps_recursive(unsigned char *ptr, size_t *used_len, size_t ofs, size_t bufsz, object obj) except -1:
+    cdef int ret = 0
+    cdef size_t new_ofs = 0
+    cdef const char* k_enc_ptr
+    cdef const char* v_str_ptr
+    cdef const unsigned char* v_bytes_ptr
+    cdef bytes k_encoded
+    cdef bytes v_encoded
+    
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not isinstance(k, str):
+                raise TypeError(f"Keys must be strings, got {type(k)}")
+            k_encoded = k.encode('utf-8')
+            k_enc_ptr = k_encoded
+
+            if v is None:
+                ret = lite3_set_null(ptr, used_len, ofs, bufsz, k_enc_ptr)
+            elif isinstance(v, bool):
+                ret = lite3_set_bool(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+            elif isinstance(v, int):
+                ret = lite3_set_i64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+            elif isinstance(v, float):
+                ret = lite3_set_f64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+            elif isinstance(v, str):
+                v_encoded = v.encode('utf-8')
+                v_str_ptr = v_encoded
+                ret = lite3_set_str(ptr, used_len, ofs, bufsz, k_enc_ptr, v_str_ptr)
+            elif isinstance(v, (bytes, bytearray)):
+                v_bytes_ptr = <const unsigned char*>v
+                ret = lite3_set_bytes(ptr, used_len, ofs, bufsz, k_enc_ptr, v_bytes_ptr, len(v))
+            elif isinstance(v, dict):
+                ret = lite3_set_obj(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
+                if ret == 0:
+                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v)
+            elif isinstance(v, (list, tuple)):
+                ret = lite3_set_arr(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
+                if ret == 0:
+                     _dumps_recursive(ptr, used_len, new_ofs, bufsz, v)
+            else:
+                 raise TypeError(f"Unsupported type: {type(v)}")
+            
+            if ret < 0:
+                raise RuntimeError(f"lite3 set failed for key {k}")
+
+    elif isinstance(obj, (list, tuple)):
+        # Array logic
+        for v in obj:
+            if v is None:
+                ret = lite3_arr_append_null(ptr, used_len, ofs, bufsz)
+            elif isinstance(v, bool):
+                ret = lite3_arr_append_bool(ptr, used_len, ofs, bufsz, v)
+            elif isinstance(v, int):
+                ret = lite3_arr_append_i64(ptr, used_len, ofs, bufsz, v)
+            elif isinstance(v, float):
+                ret = lite3_arr_append_f64(ptr, used_len, ofs, bufsz, v)
+            elif isinstance(v, str):
+                v_encoded = v.encode('utf-8')
+                v_str_ptr = v_encoded
+                ret = lite3_arr_append_str(ptr, used_len, ofs, bufsz, v_str_ptr)
+            elif isinstance(v, (bytes, bytearray)):
+                v_bytes_ptr = <const unsigned char*>v
+                ret = lite3_arr_append_bytes(ptr, used_len, ofs, bufsz, v_bytes_ptr, len(v))
+            elif isinstance(v, dict):
+                ret = lite3_arr_append_obj(ptr, used_len, ofs, bufsz, &new_ofs)
+                if ret == 0:
+                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v)
+            elif isinstance(v, (list, tuple)):
+                ret = lite3_arr_append_arr(ptr, used_len, ofs, bufsz, &new_ofs)
+                if ret == 0:
+                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v)
+            else:
+                raise TypeError(f"Unsupported type in array: {type(v)}")
+
+            if ret < 0:
+                raise RuntimeError("lite3 append failed")
+    
+    return 0
+
 def dumps(obj):
     """
-    Serialize a Python dict into lite3 bytes.
-    Currently only supports flat dicts with int/str values for testing.
+    Serialize a Python object (dict/list) to lite3 bytes.
+    Supports nested dicts, lists, scalars (int, float, str, bool, bytes, None).
     """
-    cdef size_t bufsz = 1024 * 1024 # 1MB buffer for now
+    # Just allocate a large buffer for now - 64MB
+    cdef size_t bufsz = 1024 * 1024 * 64
+    cdef size_t used_len = 0
     cdef bytearray buf = bytearray(bufsz)
     cdef unsigned char* ptr = buf
-    cdef size_t used_len = 0
     cdef int ret
-    cdef const char* k_ptr
-    cdef const char* v_ptr
-    cdef bytes k_enc
-    cdef bytes v_enc
-
-    # Initialize generic object
-    if lite3_init_obj(ptr, &used_len, bufsz) < 0:
-        raise RuntimeError("Failed to init lite3 object")
-
-    if not isinstance(obj, dict):
-        raise TypeError("Input must be a dict")
-
-    for k, v in obj.items():
-        if not isinstance(k, str):
-             raise TypeError("Keys must be strings")
+    
+    if isinstance(obj, dict):
+        if lite3_init_obj(ptr, &used_len, bufsz) < 0:
+             raise RuntimeError("Failed to init object")
+        _dumps_recursive(ptr, &used_len, 0, bufsz, obj)
+    elif isinstance(obj, (list, tuple)):
+        if lite3_init_arr(ptr, &used_len, bufsz) < 0:
+             raise RuntimeError("Failed to init array")
+        _dumps_recursive(ptr, &used_len, 0, bufsz, obj)
+    else:
+        raise TypeError("Root object must be dict or list")
         
-        k_enc = k.encode('utf-8')
-        k_ptr = k_enc
-        
-        if isinstance(v, int):
-            if lite3_set_i64(ptr, &used_len, 0, bufsz, k_ptr, v) < 0:
-                 raise RuntimeError(f"Failed to set int key {k}")
-        elif isinstance(v, str):
-            v_enc = v.encode('utf-8')
-            v_ptr = v_enc
-            if lite3_set_str(ptr, &used_len, 0, bufsz, k_ptr, v_ptr) < 0:
-                 raise RuntimeError(f"Failed to set str key {k}")
-        else:
-            # Skip unsupported for now
-            pass
-            
     return buf[:used_len]
