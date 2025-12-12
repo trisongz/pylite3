@@ -104,4 +104,6 @@ Contributions are welcome! Please check the `Makefile` for useful development co
 make install    # Install dependencies
 make build      # Compile extension
 make benchmark  # Run verification
+make test       # Run E2E tests
+make coverage   # Generate coverage report
 ```

@@ -37,11 +37,17 @@ clean:
 	rm -rf htmlcov/
 	rm -f .coverage
 
+# Run tests
+test: build
+	uv pip install pytest
+	PYTHONPATH=src uv run pytest tests
+
 # Show help
 help:
 	@echo "Available commands:"
 	@echo "  make install    - Install dependencies and package in editable mode"
 	@echo "  make build      - Compile Cython extension in-place"
 	@echo "  make benchmark  - Run the benchmark script"
+	@echo "  make test       - Run E2E tests"
 	@echo "  make coverage   - Run coverage report (requires coverage package)"
 	@echo "  make clean      - Remove build artifacts and temporary files"

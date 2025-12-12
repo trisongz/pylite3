@@ -42,4 +42,10 @@ make build
 
 # Run benchmarks
 make benchmark
+
+# Run tests
+make test
+
+# Generate coverage report
+make coverage
 ```
