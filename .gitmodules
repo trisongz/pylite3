@@ -1,0 +1,3 @@
+[submodule "vendor/lite3"]
+	path = vendor/lite3
+	url = https://github.com/fastserial/lite3

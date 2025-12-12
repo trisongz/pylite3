@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68.0", "cython>=3.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylite3"
+version = "0.1.0"
+authors = [{name = "Tri Songz", email = "ts@songzcorp.com"}]
+description = "Fast Python bindings for lite3 using zero-copy lazy parsing"
+dependencies = []
+requires-python = ">=3.9"
+
+

@@ -1,0 +1,5 @@
+include src/pylite3.pyi
+include src/py.typed
+include src/*.pyx
+include vendor/lite3/src/lite3.c
+include vendor/lite3/include/*.h
