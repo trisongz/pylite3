@@ -15,7 +15,8 @@ Data is read directly from the underlying memory buffer—**Zero Copy**.
 -   **Zero-Copy Loading**: Creates a proxy object in **microseconds**, regardless of document size.
 -   **Lazy Access**: Values are only materialized to Python objects when you ask for them.
 -   **Memory Safe**: Automatically manages the lifetime of the underlying buffer using Python's reference counting.
--   **Pythonic API**: Works like a `dict` or `list`, but faster.
+-   **Pythonic API**: Works like a `dict` (keys/values/items) or `list` (slicing/indexing), but faster.
+-   **Native Hooks**: Supports `object_hook`, `default`, and more for custom serialization/deserialization.
 -   **Recursive Writers**: Includes a `dumps()` function to serialize complex nested Python structures into `lite3`.
 
 ---
@@ -67,8 +68,15 @@ print(obj["users"][0]["name"])  # 'John Doe'
 if obj["metadata"].is_object:
     print("Metadata found")
 
+# Iterate object keys (new!)
+for key in obj["users"][0]:
+    print(f"User key: {key}")
+
+# Slicing support (new!)
+first_two_users = obj["users"][:2]
+
 # Convert to standard dictionary
-user_dict = obj["users"][0].as_dict()
+user_dict = dict(obj["users"][0])  # or .as_dict()
 ```
 
 ### Writing Data
