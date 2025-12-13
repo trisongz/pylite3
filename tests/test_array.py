@@ -19,12 +19,13 @@ def test_array_basic(parser):
     assert 3 in obj
     assert 7 not in obj
 
-def test_array_slicing_fail(parser):
-    """Ensure slicing raises NotImplementedError as per design."""
+def test_array_slicing(parser):
+    """Ensure slicing works."""
     doc = parser.parse(b'[0, 1, 2, 3, 4, 5]')
     
-    with pytest.raises(NotImplementedError):
-        _ = doc[0:2]
+    assert doc[0:2] == [0, 1]
+    assert doc[::2] == [0, 2, 4]
+    assert doc[4:] == [4, 5]
 
 def test_array_uplift(parser):
     """Ensure we can turn our Array into a python list."""
@@ -38,13 +39,13 @@ def test_array_nested(parser):
     """Ensure recursive conversion works for arrays."""
     doc = parser.parse(b'[1, [2, 3], {"a": 4}]')
     # converting to list recursively calls to_python()
-    # But element 2 is a Dict (Object). to_python() on Object fails!
-    # So as_list() should fail here because it contains an object.
+    # Now that object iteration works, this should SUCCEED.
     
-    with pytest.raises(NotImplementedError):
-         doc.as_list()
+    lst = doc.as_list()
+    assert lst == [1, [2, 3], {"a": 4}]
          
     # However, we CAN iterate and access the subarray
     sub = doc[1]
     assert sub.is_array
     assert sub.as_list() == [2, 3]
+

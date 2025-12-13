@@ -1,33 +1,36 @@
+```
 # API Reference
 
 ## `pylite3` Module
 
-### `loads(data: bytes, recursive: bool = False) -> Union[Lite3Object, Any]`
+### `dumps(obj, default=None, **kwargs)`
 
-Loads a lite3-encoded byte string.
-
-- **Parameters**:
-    - `data` (*bytes*): The input byte string containing valid lite3 data.
-    - `recursive` (*bool*):
-        - `False` (default): Returns a lazy `Lite3Object` proxy. Parsing happens only on access.
-        - `True`: Immediately decodes the entire structure into standard Python objects (`dict`, `list`, `int`, etc.). *Note: Recursive loading for Objects is currently limited due to lack of key iteration in the underlying C library.*
-
-- **Returns**: A `Lite3Object` or standard Python types.
-
-### `dumps(obj: Union[dict, list]) -> bytes`
-
-Serializes a Python object to lite3 bytes.
+Serialize a Python object to `lite3` binary format.
 
 - **Parameters**:
-    - `obj` (*dict | list*): The Python object to serialize. Supports nested structures and standard scalar types (`int`, `float`, `str`, `bytes`, `bool`, `None`).
+    - `obj` (*dict | list*): The Python object to serialize.
+    - `default` (*callable*): Optional function to handle types NOT supported natively (e.g. `datetime`). Returns a serializable object or raises `TypeError`.
+    - `**kwargs`: Fallback arguments passed to `json.dumps` if serialization fails (e.g. `indent`, `sort_keys`).
 
 - **Returns**: `bytes` containing the encoded data.
+
+### `loads(data, recursive=False, object_hook=None, ...)`
+
+Deserialize `lite3` binary data.
+
+- **Parameters**:
+    - `data` (*bytes*): The `lite3` encoded data.
+    - `recursive` (*bool*): If `True`, fully decode to Python objects immediately.
+    - `object_hook`, `parse_float`, etc.: Standard `json` hooks applied during decoding (or fallback).
+
+- **Returns**: `Lite3Object` (proxy) or decoded Python object.
 
 ---
 
 ## `Lite3Object`
 
 The `Lite3Object` is a lazy proxy wrapper around the underlying memory buffer. It holds a strong reference to the source data to ensure memory safety.
+It implements the `Mapping` protocol (for objects) and `Sequence` protocol (for arrays).
 
 ### Properties
 
@@ -41,8 +44,18 @@ Type checking properties to inspect the underlying data type without materializi
 - `.is_float` (*bool*)
 - `.is_str` (*bool*)
 - `.is_bytes` (*bool*)
+- `.is_valid` (*bool*): Checks if the buffer contains valid lite3 data.
 
 ### Methods
+
+#### `keys() -> Iterator[str]`
+Iterate over object keys.
+
+#### `values() -> Iterator[Lite3Value]`
+Iterate over values.
+
+#### `items() -> Iterator[tuple[str, Lite3Value]]`
+Iterate over (key, value) pairs.
 
 #### `__getitem__(key: Union[str, int]) -> Union[Lite3Object, Scalar]`
 
@@ -61,6 +74,7 @@ Recursively converts the object to a standard Python `dict`.
 Recursively converts the array to a standard Python `list`.
 *Raises `TypeError` if the underlying value is not an array.*
 
-#### `to_python() -> Any`
+#### `to_python(object_hook=None, ...) -> Any`
 
 Recursively converts the value to its equivalent standard Python representation.
+Supports standard `json` load hooks: `object_hook`, `parse_float`, `parse_int`, `parse_constant`, `object_pairs_hook`.

@@ -13,13 +13,11 @@ def test_object_abc_mapping(parser):
     # __len__
     assert len(doc) == 3
 
-    # __contains__ - checks keys. But contains usually iterates?
-    # collection.abc.Mapping __contains__ expects to find key.
-    # If we implemented __contains__ efficiently via lookup, it would work.
-    # But pylite3 does NOT implement __contains__ explicitly.
-    # So Python falls back to __iter__, which raises NotImplementedError.
-    with pytest.raises(NotImplementedError):
-        assert 'a' in doc
+    # __contains__ - Now iteration works, so 'in' operator should work via iteration!
+    # Although inefficient (O(N)), it works.
+    assert 'a' in doc
+    assert 'x' in doc
+    assert 'z' not in doc
 
     # __getitem__
     # Individual key access returns proxy objects (if recursive=False logic applied? No, MockParser uses default recursive=False)
@@ -38,34 +36,37 @@ def test_object_abc_mapping(parser):
     with pytest.raises(KeyError):
         _ = doc['z']
 
-    # keys(), values(), items(), get() rely on iteration or generic mapping
-    # Since __iter__ raises NotImplementedError, these fail.
+    # keys(), values(), items() should now work
+    assert list(doc.keys()) == ['a', 'c', 'x']
+    assert len(list(doc.values())) == 3
+    assert len(list(doc.items())) == 3
     
-    with pytest.raises(AttributeError):
-        list(doc.keys())
-        
-    with pytest.raises(AttributeError):
-        list(doc.values())
+    # .get() still not defined unless we add it. 
+    # But dict(doc) should work now that we support iteration and if dict uses provided methods.
+    # Actually, dict(doc) uses __iter__ and __getitem__ if it's not a known sequence.
+    # But if keys() is present, it might use that.
+    
+    # Iteration yield keys
+    keys = list(doc)
+    assert 'a' in keys
+    assert 'c' in keys
+    assert 'x' in keys
+    assert len(keys) == 3
+    
+    # dict() conversion should work because we have __iter__ and __getitem__
+    d = dict(doc)
+    assert d['a'] == 'b'
+    assert isinstance(d['c'], pylite3.Lite3Object) # Shallow copy by dict()
 
-    with pytest.raises(AttributeError):
-        list(doc.items())
-
-    # .get() on Mapping uses __getitem__ check? Or __contains__?
-    # Usually it's: try __getitem__, except KeyError return default.
-    # So .get() MIGHT work if Mapping mixin is used?
-    # BUT Lite3Object does NOT inherit from Mapping in .pyx.
-    # So .get() defaults to AttributeError unless defined.
-    # It is NOT defined in pylite3.pyx.
-    with pytest.raises(AttributeError):
-        doc.get('a')
-
-
-def test_object_uplift_fail(parser):
-    """Ensure as_dict fails as expected for now."""
+def test_object_as_dict(parser):
+    """Ensure as_dict works."""
     doc = parser.parse(b'{"a": "b", "c": [0, 1, 2], "x": {"f": "z"}}')
     
-    with pytest.raises(NotImplementedError):
-        doc.as_dict()
+    d = doc.as_dict()
+    assert isinstance(d, dict)
+    assert d['a'] == 'b'
+    assert d['c'] == [0, 1, 2] # Recursive conversion
+    assert d['x'] == {'f': 'z'}
 
 def test_object_mini(parser):
     """Test JSON minifier - Not implemented in pylite3."""
