@@ -74,3 +74,4 @@ venv.bak/
 
 # Cython generated files
 src/*.c
+site/

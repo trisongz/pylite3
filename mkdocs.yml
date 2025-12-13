@@ -1,0 +1,47 @@
+site_name: PyLite3
+site_description: Fast, Zero-Copy Python bindings for lite3.
+site_url: https://git.sample.com/fastserial/pylite3
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.expand
+    - content.code.copy
+    - content.action.edit
+    - content.action.view
+
+repo_name: fastserial/pylite3
+repo_url: https://github.com/fastserial/pylite3
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - API Reference: api.md
+  - Design & Performance: design.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
