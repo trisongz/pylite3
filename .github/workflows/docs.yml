@@ -1,9 +1,13 @@
 name: Publish Docs
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+  release:
+    types:
+      - published
+  # push:
+  #   branches:
+  #     - main
 
 permissions:
   contents: write
