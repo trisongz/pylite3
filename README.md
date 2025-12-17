@@ -44,8 +44,10 @@ Requires a C compiler and Python 3.9+.
 uv pip install pysimdjson 
 
 # Build from source
-git clone https://github.com/fastserial/pylite3.git
+git clone --recurse-submodules https://github.com/fastserial/pylite3.git
 cd pylite3
+# If you already cloned without submodules:
+git submodule update --init --recursive
 uv pip install -e .
 ```
 
