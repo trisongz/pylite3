@@ -30,7 +30,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install Dependencies
-        run: uv pip install mkdocs-material
+        run: uv pip install --system mkdocs-material
 
       - name: Deploy
         run: uv run mkdocs gh-deploy --force
