@@ -1,6 +1,6 @@
 site_name: PyLite3
 site_description: Fast, Zero-Copy Python bindings for lite3.
-site_url: https://git.sample.com/fastserial/pylite3
+site_url: https://trisongz.github.io/pylite3
 
 theme:
   name: material
@@ -23,14 +23,17 @@ theme:
     - content.action.edit
     - content.action.view
 
-repo_name: fastserial/pylite3
-repo_url: https://github.com/fastserial/pylite3
+repo_name: trisongz/pylite3
+repo_url: https://github.com/trisongz/pylite3
 
 nav:
   - Home: index.md
   - Installation: installation.md
+  - Usage: usage.md
   - API Reference: api.md
   - Design & Performance: design.md
+  - FAQ: faq.md
+  - Contributing: contributing.md
 
 plugins:
   - search

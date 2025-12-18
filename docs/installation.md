@@ -8,14 +8,21 @@
 - C Compiler (Clang on macOS, GCC on Linux, MSVC on Windows)
 - `uv` (recommended) or `pip`
 
+## Install from PyPI
+
+If a wheel is available for your platform:
+
+```bash
+uv pip install pylite3
+```
+
 ## Installing from Source
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/fastserial/pylite3.git
+   git clone --recurse-submodules https://github.com/fastserial/pylite3.git
    cd pylite3
-   # Initialize submodule
-   git submodule update --init --recursive
+   git submodule update --init --recursive  # if needed
    ```
 
 2. **Install with `uv` (Recommended)**:
@@ -35,7 +42,7 @@ For contributors who want to run benchmarks or modify the Cython bindings:
 
 ```bash
 # Install dependencies
-uv sync
+uv sync --group dev
 
 # Build in-place
 make build
@@ -44,7 +51,7 @@ make build
 make benchmark
 
 # Run tests
-make test
+uv run pytest
 
 # Generate coverage report
 make coverage

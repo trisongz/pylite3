@@ -31,7 +31,7 @@ Comparison vs `pysimdjson` for initial load time. Because `pylite3` is lazy, it 
 | **citm_catalog.json** | 1.72 MB | 49,471 µs | 3.6 µs | **13,803x** |
 | **twitter.json** | 631 KB | 24,189 µs | 2.0 µs | **12,354x** |
 
-_See [Functionality & Performance](docs/design.md) for more details._
+_See [Design & Performance](design.md) for more details._
 
 ---
 
@@ -40,18 +40,25 @@ _See [Functionality & Performance](docs/design.md) for more details._
 Requires a C compiler and Python 3.9+.
 
 ```bash
-# Using uv (Recommended)
-uv pip install pysimdjson 
+# From PyPI (recommended)
+uv pip install pylite3
 
 # Build from source
-git clone https://github.com/fastserial/pylite3.git
+git clone --recurse-submodules https://github.com/fastserial/pylite3.git
 cd pylite3
+git submodule update --init --recursive  # if needed
 uv pip install -e .
 ```
 
 ---
 
 ## 🛠 Usage
+
+### Notes
+
+- `pylite3.loads(...)` uses a Lite3 fast-path and falls back to `json.loads(...)` for non-Lite3 inputs.
+- `pylite3.dumps(...)` returns Lite3 `bytes` on success; otherwise it falls back to `json.dumps(...)` and returns `str` by default.
+  - Use `fallback="raise"` to disable the JSON fallback.
 
 ### Reading Data
 
@@ -98,9 +105,11 @@ encoded_bytes = pylite3.dumps(payload)
 
 ## 📚 Documentation
 
--   [📥 Installation Guide](docs/installation.md)
--   [📖 API Reference](docs/api.md)
--   [🏗 Design & Performance](docs/design.md)
+-   [📥 Installation Guide](installation.md)
+-   [🛠 Usage](usage.md)
+-   [📖 API Reference](api.md)
+-   [🏗 Design & Performance](design.md)
+-   [❓ FAQ](faq.md)
 
 ---
 
