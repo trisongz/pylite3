@@ -58,7 +58,9 @@ jobs:
       fail-fast: true
       matrix:
         os: [ubuntu-latest, windows-latest, macos-14]
-        py: ["cp39", "cp310", "cp311", "cp312", "cp313"]
+        py: ["cp311", "cp312"]
+        # os: [ubuntu-latest, windows-latest, macos-14]
+        # py: ["cp39", "cp310", "cp311", "cp312", "cp313"]
 
     steps:
       - uses: actions/checkout@v4
@@ -107,13 +109,13 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Publish with API token (if configured)
-        if: secrets.PYPI_API_TOKEN != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+      # - name: Publish with API token (if configured)
+      #   if: secrets.PYPI_API_TOKEN != ''
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     password: ${{ secrets.PYPI_API_TOKEN }}
 
       - name: Publish with Trusted Publishing (OIDC)
-        if: secrets.PYPI_API_TOKEN == ''
+        # if: secrets.PYPI_API_TOKEN == ''
         uses: pypa/gh-action-pypi-publish@release/v1
 
