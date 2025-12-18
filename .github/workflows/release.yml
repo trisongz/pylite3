@@ -37,10 +37,15 @@ jobs:
 
       - name: Set version from tag (release only)
         if: github.event_name == 'release'
+        shell: python
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          TAG="${TAG#v}"
-          echo "${TAG}" > VERSION
+          import os
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag.startswith("v"):
+            tag = tag[1:]
+          with open("VERSION", "w", encoding="utf-8") as f:
+            f.write(tag + "\n")
+          print(f"VERSION={tag}")
 
       - name: Build sdist
         run: uv build --sdist
@@ -57,10 +62,8 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-14]
-        py: ["cp311", "cp312"]
-        # os: [ubuntu-latest, windows-latest, macos-14]
-        # py: ["cp39", "cp310", "cp311", "cp312", "cp313"]
+        os: [ubuntu-latest, windows-latest, macos-14]
+        py: ["cp39", "cp310", "cp311", "cp312", "cp313"]
 
     steps:
       - uses: actions/checkout@v4
@@ -70,7 +73,7 @@ jobs:
       - name: Setting up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
 
       - name: Set up QEMU
         if: runner.os == 'Linux'
@@ -80,10 +83,15 @@ jobs:
 
       - name: Set version from tag (release only)
         if: github.event_name == 'release'
+        shell: python
         run: |
-          TAG="${{ github.event.release.tag_name }}"
-          TAG="${TAG#v}"
-          echo "${TAG}" > VERSION
+          import os
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag.startswith("v"):
+            tag = tag[1:]
+          with open("VERSION", "w", encoding="utf-8") as f:
+            f.write(tag + "\n")
+          print(f"VERSION={tag}")
 
       - name: Build & test wheels
         uses: pypa/cibuildwheel@v2.22.0
@@ -118,4 +126,3 @@ jobs:
       - name: Publish with Trusted Publishing (OIDC)
         # if: secrets.PYPI_API_TOKEN == ''
         uses: pypa/gh-action-pypi-publish@release/v1
-
