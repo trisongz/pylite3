@@ -19,8 +19,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/fastserial/pylite3"
-Repository = "https://github.com/fastserial/pylite3"
+Homepage = "https://github.com/trisongz/pylite3"
+Repository = "https://github.com/trisongz/pylite3"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
