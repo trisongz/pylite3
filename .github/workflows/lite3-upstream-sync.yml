@@ -1,0 +1,136 @@
+name: Upstream lite3 Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: lite3-upstream-sync
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check upstream lite3 commit
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LITE3_URL="$(git config -f .gitmodules --get submodule.vendor/lite3.url)"
+          echo "lite3_url=${LITE3_URL}" >> "$GITHUB_OUTPUT"
+
+          UPSTREAM_COMMIT="$(git ls-remote "${LITE3_URL}" HEAD | awk '{print $1}')"
+          CURRENT_COMMIT="$(git -C vendor/lite3 rev-parse HEAD)"
+
+          echo "upstream_commit=${UPSTREAM_COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "current_commit=${CURRENT_COMMIT}" >> "$GITHUB_OUTPUT"
+
+          if [ "${UPSTREAM_COMMIT}" = "${CURRENT_COMMIT}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "lite3 unchanged: ${CURRENT_COMMIT}"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "lite3 changed: ${CURRENT_COMMIT} -> ${UPSTREAM_COMMIT}"
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.check.outputs.upstream_commit }}"
+          SHORT="${SHORT:0:8}"
+          DATE="$(date -u +%Y%m%d)"
+          BRANCH="bot/lite3-sync-${DATE}-${SHORT}"
+          echo "BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+
+      - name: Update lite3 submodule to upstream HEAD
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REMOTE="$(git -C vendor/lite3 remote | head -n 1 || true)"
+          if [ -z "${REMOTE}" ]; then
+            REMOTE="origin"
+          fi
+
+          git -C vendor/lite3 fetch --depth 1 "${REMOTE}" "${{ steps.check.outputs.upstream_commit }}"
+          git -C vendor/lite3 checkout --detach "${{ steps.check.outputs.upstream_commit }}"
+          git add vendor/lite3
+
+          SHORT="${{ steps.check.outputs.upstream_commit }}"
+          SHORT="${SHORT:0:8}"
+          git commit -m "chore: update lite3 submodule to ${SHORT}"
+
+      - name: Push sync branch
+        if: steps.check.outputs.changed == 'true'
+        run: git push --set-upstream origin "${BRANCH}"
+
+      - name: Run CI workflow on sync branch
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh workflow run ci.yml --ref "${BRANCH}"
+
+          # Wait until the run appears, then watch it.
+          for _ in {1..30}; do
+            RUN_ID="$(gh run list --workflow ci.yml --branch "${BRANCH}" --limit 1 --json databaseId -q '.[0].databaseId' || true)"
+            if [ -n "${RUN_ID}" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ -z "${RUN_ID:-}" ]; then
+            echo "CI run did not start (workflow=ci.yml, branch=${BRANCH})" >&2
+            exit 1
+          fi
+
+          echo "Waiting for CI run ${RUN_ID} on ${BRANCH}"
+          gh run watch "${RUN_ID}" --exit-status
+
+      - name: Fast-forward main, bump VERSION, and push (triggers release)
+        if: steps.check.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git checkout main
+          git pull --ff-only origin main
+          git merge --ff-only "${BRANCH}"
+
+          uv run python scripts/bump_version.py
+          git add VERSION
+          git commit -m "chore: bump version"
+          git push origin main
+
+      - name: Delete sync branch
+        if: steps.check.outputs.changed == 'true'
+        run: git push origin --delete "${BRANCH}"
