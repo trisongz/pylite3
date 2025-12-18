@@ -51,6 +51,23 @@ def _ensure_lite3_submodule_checked_out() -> None:
             "lite3 submodule update completed but vendor/lite3/src/lite3.c is still missing."
         )
 
+
+def _extra_compile_args() -> list[str]:
+    """
+    Choose portable compile flags for PyPI wheels by default.
+
+    Opt-in to CPU-specific builds with `PYLITE3_MARCH_NATIVE=1` for local benchmarking.
+    """
+    is_msvc = os.name == "nt"
+    if is_msvc:
+        return ["/O2"]
+
+    args = ["-O3", "-std=c11"]
+    if os.environ.get("PYLITE3_MARCH_NATIVE") == "1":
+        args.append("-march=native")
+    return args
+
+
 # Check for coverage/tracing build
 use_tracing = os.environ.get("CYTHON_TRACE") == "1"
 
@@ -68,15 +85,14 @@ _ensure_lite3_submodule_checked_out()
 # Define the C Extension
 extensions = [
     Extension(
-        name="pylite3",
+        name="pylite3._core",
         sources=[
             "src/pylite3.pyx",
             "vendor/lite3/src/lite3.c"  # Compile the C lib alongside the binding
         ],
         include_dirs=["vendor/lite3/include"],
         define_macros=macros,
-        # Optimization flags (adjust for GCC/Clang vs MSVC)
-        extra_compile_args=["-O3", "-std=c11", "-march=native"],
+        extra_compile_args=_extra_compile_args(),
     )
 ]
 
@@ -85,5 +101,8 @@ setup(
         extensions, 
         compiler_directives=compiler_directives
     ),
+    package_dir={"": "src"},
+    packages=["pylite3"],
+    package_data={"pylite3": ["py.typed", "__init__.pyi"]},
     include_package_data=True,
 )

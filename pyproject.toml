@@ -1,21 +1,56 @@
 [build-system]
-requires = ["setuptools>=68.0", "cython>=3.0"]
+requires = ["setuptools>=74.1", "cython>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylite3"
-version = "0.1.0"
+dynamic = ["version"]
 authors = [{name = "Tri Songz", email = "ts@songzcorp.com"}]
 description = "Fast Python bindings for lite3 using zero-copy lazy parsing"
-dependencies = []
+readme = "README.md"
 requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: C",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/fastserial/pylite3"
+Repository = "https://github.com/fastserial/pylite3"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pylite3"]
+
+[tool.setuptools.package-data]
+pylite3 = ["py.typed", "__init__.pyi"]
+
+[tool.setuptools.dynamic]
+version = { file = ["VERSION"] }
 
 
 [dependency-groups]
 dev = [
+    "build>=1.2.2.post1",
+    "cibuildwheel>=2.22.0",
     "pytest>=7.0",
     "cython>=3.0",
     "coverage>=7.0",
     "pysimdjson>=0.0.0",
     "mkdocs-material>=9.0",
 ]
+
+[tool.cibuildwheel]
+test-command = "pytest {project}/tests"
+before-test = "pip install pytest"
+
+[tool.cibuildwheel.linux]
+archs = ["auto", "aarch64"]

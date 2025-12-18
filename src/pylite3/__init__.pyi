@@ -3,6 +3,8 @@ from typing import Union, Optional, Any, Iterator, List, Dict, overload
 Lite3Scalar = Union[int, float, str, bytes, bool, None]
 Lite3Value = Union['Lite3Object', Lite3Scalar]
 
+__version__: str
+
 class Lite3Object:
     def __init__(self, data: bytes, offset: int = ..., type_hint: int = ...) -> None: ...
     
@@ -55,3 +57,4 @@ def loads(data: Union[bytes, str], *, recursive: bool = False, cls: Any = ..., o
 def dumps(obj: Any, *, skipkeys: bool = ..., ensure_ascii: bool = ..., check_circular: bool = ..., 
           allow_nan: bool = ..., cls: Any = ..., indent: Union[None, int, str] = ..., 
           separators: Any = ..., default: Any = ..., sort_keys: bool = ..., **kwargs: Any) -> Union[bytes, str]: ...
+
