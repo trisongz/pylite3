@@ -1,9 +1,10 @@
 # cython: language_level=3
 from libc.stdint cimport uint8_t, int64_t, uint32_t, uint64_t
 from libc.string cimport memcpy, strlen
+from libc.errno cimport errno, ENOBUFS
 from cpython.buffer cimport PyObject_GetBuffer, PyBuffer_Release, Py_buffer
-from cpython.ref cimport Py_INCREF, Py_DECREF
 from cpython.object cimport PyObject
+from cpython.bytes cimport PyBytes_FromStringAndSize
 
 import json
 import collections.abc
@@ -33,6 +34,7 @@ cdef extern from "lite3.h":
         const char *ptr
 
     ctypedef struct lite3_bytes:
+        uint32_t gen
         uint32_t len
         const unsigned char *ptr
 
@@ -96,6 +98,38 @@ cdef extern from "lite3.h":
     int lite3_iter_create(const unsigned char *buf, size_t buflen, size_t ofs, lite3_iter *out)
     int lite3_iter_next(const unsigned char *buf, size_t buflen, lite3_iter *iter, lite3_str *out_key, size_t *out_val_ofs)
 
+    # Validation helpers (static inline in header; safe to call from Cython)
+    int _lite3_verify_get(const unsigned char *buf, size_t buflen, size_t ofs)
+    int _lite3_verify_obj_get(const unsigned char *buf, size_t buflen, size_t ofs)
+    int _lite3_verify_arr_get(const unsigned char *buf, size_t buflen, size_t ofs)
+
+    # Value accessors (static inline in header; use memcpy internally for alignment safety)
+    bint lite3_val_bool(lite3_val *val)
+    int64_t lite3_val_i64(lite3_val *val)
+    double lite3_val_f64(lite3_val *val)
+    const char *lite3_val_str_n(lite3_val *val, size_t *out_len)
+    const unsigned char *lite3_val_bytes(lite3_val *val, size_t *out_len)
+
+
+cdef inline size_t _iter_key_len_excluding_nul(lite3_str key):
+    """
+    lite3_iter_next stores a compact key-tag in `lite3_str.len` (not the string length).
+    Decode key length (excluding NUL) from that tag.
+    """
+    cdef size_t tag = <size_t>key.len + 1
+    cdef size_t key_size_including_nul = tag >> 2
+    if key_size_including_nul == 0:
+        return 0
+    return key_size_including_nul - 1
+
+
+cdef inline void _raise_lite3_write_error(int ret, object msg) except *:
+    if ret >= 0:
+        return
+    if errno == ENOBUFS:
+        raise BufferError("lite3 buffer too small")
+    raise RuntimeError(msg)
+
 
 cdef class Lite3Object:
     """
@@ -112,11 +146,17 @@ cdef class Lite3Object:
         """
         Internal constructor. Use loads() or internal creation.
         """
-        # We expect 'data' to be a bytes-like object (or our _owner)
-        self._owner = data
+        # Keep a stable exported buffer alive.
+        #
+        # If the input is mutable (e.g. bytearray), holding a memoryview prevents resizing
+        # while the view exists, which keeps the underlying pointer stable.
+        if isinstance(data, memoryview):
+            self._owner = data
+        else:
+            self._owner = memoryview(data)
         
         cdef Py_buffer pybuf
-        PyObject_GetBuffer(data, &pybuf, 0) # Simple buffer request
+        PyObject_GetBuffer(self._owner, &pybuf, 0) # Simple buffer request
         self._ptr = <const uint8_t*>pybuf.buf
         self._len = <size_t>pybuf.len
         PyBuffer_Release(&pybuf)
@@ -200,6 +240,8 @@ cdef class Lite3Object:
             return self._get_obj_item_by_key(key)
         elif self._type_cache == LITE3_TYPE_ARRAY:
             if isinstance(key, int):
+                if key < 0:
+                    key = key + len(self)
                 return self._get_arr_item_by_index(key)
             elif isinstance(key, slice):
                 start, stop, step = key.indices(len(self))
@@ -208,6 +250,31 @@ cdef class Lite3Object:
                 raise TypeError("Array indices must be integers")
         else:
             raise TypeError("Scalar Lite3Object is not subscriptable")
+
+    def __contains__(self, key):
+        cdef bytes k_bytes
+        cdef const char *k_cstr
+
+        if self._type_cache == LITE3_TYPE_OBJECT:
+            if not isinstance(key, str):
+                return False
+            k_bytes = (<str>key).encode("utf-8")
+            k_cstr = k_bytes
+            return lite3_get_type(self._ptr, self._len, self._ofs, k_cstr) != LITE3_TYPE_INVALID
+        if self._type_cache == LITE3_TYPE_ARRAY:
+            for v in self:
+                if v == key:
+                    return True
+            return False
+        return False
+
+    def get(self, key, default=None):
+        if self._type_cache != LITE3_TYPE_OBJECT:
+            raise TypeError("Lite3Object is not an object")
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
     cdef object _get_obj_item_by_key(self, str key):
         cdef:
@@ -243,21 +310,28 @@ cdef class Lite3Object:
         # Convert a single lite3_val* to Python/Proxy
         cdef lite3_type t = <lite3_type>val.type
         cdef size_t sub_ofs = <size_t>(<uint8_t*>val - self._ptr)
+        cdef size_t out_len = 0
+        cdef const char *s_ptr
+        cdef const unsigned char *b_ptr
         
         if t == LITE3_TYPE_NULL:
             return None
         elif t == LITE3_TYPE_BOOL:
-             # val->val is uint8_t[]
-             return bool((<uint8_t*>val.val)[0])
+             return bool(lite3_val_bool(val))
         elif t == LITE3_TYPE_I64:
-             return (<int64_t*>val.val)[0]
+             return lite3_val_i64(val)
         elif t == LITE3_TYPE_F64:
-             return (<double*>val.val)[0]
+             return lite3_val_f64(val)
         elif t == LITE3_TYPE_STRING:
-             # We need to perform string copy
-             return (<char*>(val.val + 4))[:(<uint32_t*>val.val)[0] - 1].decode('utf-8')
+             s_ptr = lite3_val_str_n(val, &out_len)
+             if s_ptr == NULL:
+                 raise ValueError("Invalid lite3 string pointer")
+             return s_ptr[:out_len].decode('utf-8')
         elif t == LITE3_TYPE_BYTES:
-             return (<unsigned char*>(val.val + 4))[:(<uint32_t*>val.val)[0]]
+             b_ptr = lite3_val_bytes(val, &out_len)
+             if b_ptr == NULL:
+                 raise ValueError("Invalid lite3 bytes pointer")
+             return <bytes>PyBytes_FromStringAndSize(<const char *>b_ptr, out_len)
         elif t == LITE3_TYPE_OBJECT:
              return Lite3Object(self._owner, sub_ofs, LITE3_TYPE_OBJECT)
         elif t == LITE3_TYPE_ARRAY:
@@ -273,10 +347,19 @@ cdef class Lite3Object:
         return 0
 
     def __iter__(self):
+        cdef lite3_iter it
+        cdef size_t val_ofs
+        cdef int ret
+
         if self._type_cache == LITE3_TYPE_ARRAY:
-             # Iterator for array: yield items
-             for i in range(len(self)):
-                 yield self[i]
+             if lite3_iter_create(self._ptr, self._len, self._ofs, &it) < 0:
+                 raise RuntimeError("Failed to create iterator")
+
+             while True:
+                 ret = lite3_iter_next(self._ptr, self._len, &it, NULL, &val_ofs)
+                 if ret == 0:  # LITE3_ITER_DONE
+                     break
+                 yield self._materialize_val(<lite3_val *>(self._ptr + val_ofs))
         elif self._type_cache == LITE3_TYPE_OBJECT:
              # Iterator for object: yield KEYS
              iter_obj = self._get_iterator()
@@ -317,12 +400,9 @@ cdef class Lite3Object:
                 # Key is in lite3_str key. string is at key.ptr, len is key.len.
                 # key.ptr is pointer inside buffer.
                 # print(f"DEBUG: key len={key.len} ptr={ <size_t>key.ptr } gen={key.gen}")
-                # Use strlen because key.len seems unreliable/corrupted in tests (return 7 for 'a')
-                # Since lite3 strings are null-terminated, strlen works.
-                # print(f"DEBUG: key len={key.len} ptr={ <size_t>key.ptr } gen={key.gen}")
-                # Use strlen because key.len seems unreliable/corrupted in tests (return 7 for 'a')
-                # Since lite3 strings are null-terminated, strlen works.
-                klen = strlen(key.ptr)
+                if key.ptr == NULL:
+                    raise RuntimeError("Iterator returned NULL key pointer")
+                klen = _iter_key_len_excluding_nul(key)
                 py_key = key.ptr[:klen].decode('utf-8')
                 yield (py_key, val)
             else:
@@ -333,32 +413,70 @@ cdef class Lite3Object:
         Recursively convert to standard Python objects (dict/list).
         Support standard json hooks.
         """
+        cdef lite3_iter it
+        cdef lite3_str key
+        cdef size_t val_ofs
+        cdef int ret
+        cdef size_t klen
+
         if self._type_cache == LITE3_TYPE_ARRAY:
-            return [x.to_python(object_hook=object_hook, parse_float=parse_float, 
-                                parse_int=parse_int, parse_constant=parse_constant,
-                                object_pairs_hook=object_pairs_hook) 
-                    if isinstance(x, Lite3Object) else x for x in self]
+            if lite3_iter_create(self._ptr, self._len, self._ofs, &it) < 0:
+                raise RuntimeError("Failed to create iterator")
+
+            out = []
+            while True:
+                ret = lite3_iter_next(self._ptr, self._len, &it, NULL, &val_ofs)
+                if ret == 0:
+                    break
+
+                v = self._materialize_val(<lite3_val *>(self._ptr + val_ofs))
+                if isinstance(v, Lite3Object):
+                    v = v.to_python(
+                        object_hook=object_hook,
+                        parse_float=parse_float,
+                        parse_int=parse_int,
+                        parse_constant=parse_constant,
+                        object_pairs_hook=object_pairs_hook,
+                    )
+                out.append(v)
+            return out
                     
         elif self._type_cache == LITE3_TYPE_OBJECT:
+            if lite3_iter_create(self._ptr, self._len, self._ofs, &it) < 0:
+                raise RuntimeError("Failed to create iterator")
+
             if object_pairs_hook is not None:
-               pairs = []
-               # Use iterator to get (key, val)
-               for k, v in self._iter_gen(True):
-                   if isinstance(v, Lite3Object):
-                       v = v.to_python(object_hook=object_hook, parse_float=parse_float, 
-                                       parse_int=parse_int, parse_constant=parse_constant,
-                                       object_pairs_hook=object_pairs_hook)
-                   pairs.append((k, v))
-               return object_pairs_hook(pairs)
-               
-            d = {}
-            for k, v in self._iter_gen(True): # Yields (key, value_proxy)
+                pairs = []
+            else:
+                d = {}
+
+            while True:
+                ret = lite3_iter_next(self._ptr, self._len, &it, &key, &val_ofs)
+                if ret == 0:
+                    break
+
+                if key.ptr == NULL:
+                    raise RuntimeError("Iterator returned NULL key pointer")
+                klen = _iter_key_len_excluding_nul(key)
+                k = key.ptr[:klen].decode("utf-8")
+
+                v = self._materialize_val(<lite3_val *>(self._ptr + val_ofs))
                 if isinstance(v, Lite3Object):
-                     v = v.to_python(object_hook=object_hook, parse_float=parse_float, 
-                                     parse_int=parse_int, parse_constant=parse_constant,
-                                     object_pairs_hook=object_pairs_hook)
-                d[k] = v
-            
+                    v = v.to_python(
+                        object_hook=object_hook,
+                        parse_float=parse_float,
+                        parse_int=parse_int,
+                        parse_constant=parse_constant,
+                        object_pairs_hook=object_pairs_hook,
+                    )
+
+                if object_pairs_hook is not None:
+                    pairs.append((k, v))
+                else:
+                    d[k] = v
+
+            if object_pairs_hook is not None:
+                return object_pairs_hook(pairs)
             if object_hook is not None:
                 return object_hook(d)
             return d
@@ -421,6 +539,12 @@ def loads(data, *, bint recursive=False, cls=None, object_hook=None, parse_float
         Lite3Object: If `data` is valid lite3 and `recursive` is False.
         dict/list/scalar: If `recursive` is True OR if fallback to `json.loads` occurs.
     """
+    cdef size_t ofs
+    cdef size_t buflen
+    cdef const uint8_t *buf
+    cdef uint8_t tag
+    cdef uint32_t len32
+
     # Try parsing as Lite3
     try:
         # Lite3Object expects bytes supports buffer protocol.
@@ -430,8 +554,52 @@ def loads(data, *, bint recursive=False, cls=None, object_hook=None, parse_float
              
         obj = Lite3Object(data)
         if not obj.is_valid:
-             # First byte didn't look like a valid type tag
-             raise ValueError("Invalid lite3 header")
+            # First byte didn't look like a valid type tag
+            raise ValueError("Invalid lite3 header")
+
+        # Verify buffer bounds early to avoid unsafe reads on malformed inputs.
+        #
+        # lite3 expects root-level object/array; for other tags we do minimal bounds checks.
+        ofs = obj._ofs
+        buflen = obj._len
+        buf = obj._ptr
+
+        if ofs >= buflen:
+            raise ValueError("Invalid lite3 offset")
+
+        tag = buf[ofs]
+        if tag == LITE3_TYPE_OBJECT:
+            if _lite3_verify_obj_get(<const unsigned char *>buf, buflen, ofs) < 0:
+                raise ValueError("Invalid lite3 object")
+        elif tag == LITE3_TYPE_ARRAY:
+            if _lite3_verify_arr_get(<const unsigned char *>buf, buflen, ofs) < 0:
+                raise ValueError("Invalid lite3 array")
+        elif tag == LITE3_TYPE_NULL:
+            pass
+        elif tag == LITE3_TYPE_BOOL:
+            if buflen - ofs < 2:
+                raise ValueError("Invalid lite3 bool")
+        elif tag == LITE3_TYPE_I64 or tag == LITE3_TYPE_F64:
+            if buflen - ofs < 1 + 8:
+                raise ValueError("Invalid lite3 number")
+        elif tag == LITE3_TYPE_BYTES:
+            if buflen - ofs < 1 + 4:
+                raise ValueError("Invalid lite3 bytes header")
+            len32 = 0
+            memcpy(&len32, <const void *>(buf + ofs + 1), 4)
+            if buflen - ofs < 1 + 4 + <size_t>len32:
+                raise ValueError("Invalid lite3 bytes length")
+        elif tag == LITE3_TYPE_STRING:
+            if buflen - ofs < 1 + 4:
+                raise ValueError("Invalid lite3 string header")
+            len32 = 0
+            memcpy(&len32, <const void *>(buf + ofs + 1), 4)
+            if len32 < 1:
+                raise ValueError("Invalid lite3 string length")
+            if buflen - ofs < 1 + 4 + <size_t>len32:
+                raise ValueError("Invalid lite3 string length")
+        else:
+            raise ValueError("Invalid lite3 type tag")
              
         if recursive:
             return obj.to_python(object_hook=object_hook, parse_float=parse_float, 
@@ -457,32 +625,40 @@ cdef int _dumps_recursive(unsigned char *ptr, size_t *used_len, size_t ofs, size
         for k, v in obj.items():
             if not isinstance(k, str):
                 raise TypeError(f"Keys must be strings, got {type(k)}")
+            if "\x00" in k:
+                raise TypeError("Keys must not contain NUL bytes")
             k_encoded = k.encode('utf-8')
             k_enc_ptr = k_encoded
 
             if v is None:
                 ret = lite3_set_null(ptr, used_len, ofs, bufsz, k_enc_ptr)
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, bool):
                 ret = lite3_set_bool(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, int):
                 ret = lite3_set_i64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, float):
                 ret = lite3_set_f64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, str):
                 v_encoded = v.encode('utf-8')
                 v_str_ptr = v_encoded
                 ret = lite3_set_str(ptr, used_len, ofs, bufsz, k_enc_ptr, v_str_ptr)
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, (bytes, bytearray)):
                 v_bytes_ptr = <const unsigned char*>v
                 ret = lite3_set_bytes(ptr, used_len, ofs, bufsz, k_enc_ptr, v_bytes_ptr, len(v))
+                _raise_lite3_write_error(ret, f"lite3 set failed for key {k}")
             elif isinstance(v, dict):
                 ret = lite3_set_obj(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
-                if ret == 0:
-                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+                _raise_lite3_write_error(ret, f"lite3 set object failed for key {k}")
+                _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
             elif isinstance(v, (list, tuple)):
                 ret = lite3_set_arr(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
-                if ret == 0:
-                     _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+                _raise_lite3_write_error(ret, f"lite3 set array failed for key {k}")
+                _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
             else:
                  # Try default hook
                  if default_fn is not None:
@@ -505,36 +681,39 @@ cdef int _dumps_recursive(unsigned char *ptr, size_t *used_len, size_t ofs, size
                          raise TypeError(f"Object of type {type(v).__name__} is not JSON serializable")
                  else:
                      raise TypeError(f"Object of type {type(v).__name__} is not JSON serializable")
-            
-            if ret < 0: # Note: set functions return err, but _dumps_set_value might raise exception
-                raise RuntimeError(f"lite3 set failed for key {k}")
 
     elif isinstance(obj, (list, tuple)):
         # Array logic
         for v in obj:
             if v is None:
                 ret = lite3_arr_append_null(ptr, used_len, ofs, bufsz)
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, bool):
                 ret = lite3_arr_append_bool(ptr, used_len, ofs, bufsz, v)
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, int):
                 ret = lite3_arr_append_i64(ptr, used_len, ofs, bufsz, v)
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, float):
                 ret = lite3_arr_append_f64(ptr, used_len, ofs, bufsz, v)
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, str):
                 v_encoded = v.encode('utf-8')
                 v_str_ptr = v_encoded
                 ret = lite3_arr_append_str(ptr, used_len, ofs, bufsz, v_str_ptr)
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, (bytes, bytearray)):
                 v_bytes_ptr = <const unsigned char*>v
                 ret = lite3_arr_append_bytes(ptr, used_len, ofs, bufsz, v_bytes_ptr, len(v))
+                _raise_lite3_write_error(ret, "lite3 append failed")
             elif isinstance(v, dict):
                 ret = lite3_arr_append_obj(ptr, used_len, ofs, bufsz, &new_ofs)
-                if ret == 0:
-                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+                _raise_lite3_write_error(ret, "lite3 append failed")
+                _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
             elif isinstance(v, (list, tuple)):
                 ret = lite3_arr_append_arr(ptr, used_len, ofs, bufsz, &new_ofs)
-                if ret == 0:
-                    _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+                _raise_lite3_write_error(ret, "lite3 append failed")
+                _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
             else:
                  # Try default hook
                  if default_fn is not None:
@@ -545,9 +724,6 @@ cdef int _dumps_recursive(unsigned char *ptr, size_t *used_len, size_t ofs, size
                           raise TypeError(f"Object of type {type(v).__name__} is not JSON serializable")
                  else:
                     raise TypeError(f"Unsupported type in array: {type(v)}")
-
-            if ret < 0:
-                raise RuntimeError("lite3 append failed")
     
     return 0
 
@@ -560,27 +736,33 @@ cdef int _dumps_set_value(unsigned char *ptr, size_t *used_len, size_t ofs, size
     
     if v is None:
         ret = lite3_set_null(ptr, used_len, ofs, bufsz, k_enc_ptr)
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, bool):
         ret = lite3_set_bool(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, int):
         ret = lite3_set_i64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, float):
         ret = lite3_set_f64(ptr, used_len, ofs, bufsz, k_enc_ptr, v)
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, str):
         v_encoded = v.encode('utf-8')
         v_str_ptr = v_encoded
         ret = lite3_set_str(ptr, used_len, ofs, bufsz, k_enc_ptr, v_str_ptr)
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, (bytes, bytearray)):
         v_bytes_ptr = <const unsigned char*>v
         ret = lite3_set_bytes(ptr, used_len, ofs, bufsz, k_enc_ptr, v_bytes_ptr, len(v))
+        _raise_lite3_write_error(ret, "lite3 set failed")
     elif isinstance(v, dict):
         ret = lite3_set_obj(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
-        if ret == 0:
-            _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+        _raise_lite3_write_error(ret, "lite3 set failed")
+        _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
     elif isinstance(v, (list, tuple)):
         ret = lite3_set_arr(ptr, used_len, ofs, bufsz, k_enc_ptr, &new_ofs)
-        if ret == 0:
-               _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+        _raise_lite3_write_error(ret, "lite3 set failed")
+        _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
     else:
         # If we are here recursively (from default hook), we don't recurse default hook again?
         # Standard json recurses default hook results too?
@@ -606,27 +788,33 @@ cdef int _dumps_append_value(unsigned char *ptr, size_t *used_len, size_t ofs, s
     
     if v is None:
         ret = lite3_arr_append_null(ptr, used_len, ofs, bufsz)
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, bool):
         ret = lite3_arr_append_bool(ptr, used_len, ofs, bufsz, v)
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, int):
         ret = lite3_arr_append_i64(ptr, used_len, ofs, bufsz, v)
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, float):
         ret = lite3_arr_append_f64(ptr, used_len, ofs, bufsz, v)
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, str):
         v_encoded = v.encode('utf-8')
         v_str_ptr = v_encoded
         ret = lite3_arr_append_str(ptr, used_len, ofs, bufsz, v_str_ptr)
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, (bytes, bytearray)):
         v_bytes_ptr = <const unsigned char*>v
         ret = lite3_arr_append_bytes(ptr, used_len, ofs, bufsz, v_bytes_ptr, len(v))
+        _raise_lite3_write_error(ret, "lite3 append failed")
     elif isinstance(v, dict):
         ret = lite3_arr_append_obj(ptr, used_len, ofs, bufsz, &new_ofs)
-        if ret == 0:
-            _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+        _raise_lite3_write_error(ret, "lite3 append failed")
+        _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
     elif isinstance(v, (list, tuple)):
         ret = lite3_arr_append_arr(ptr, used_len, ofs, bufsz, &new_ofs)
-        if ret == 0:
-            _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
+        _raise_lite3_write_error(ret, "lite3 append failed")
+        _dumps_recursive(ptr, used_len, new_ofs, bufsz, v, default_fn)
     else:
          # Try default hook
          if default_fn is not None:
@@ -644,7 +832,7 @@ cdef int _dumps_append_value(unsigned char *ptr, size_t *used_len, size_t ofs, s
 
 def dumps(obj, *, skipkeys=False, ensure_ascii=True, check_circular=True,
           allow_nan=True, cls=None, indent=None, separators=None,
-          default=None, sort_keys=False, **kwargs):
+          default=None, sort_keys=False, fallback="json", **kwargs):
     """
     Serialize to lite3 bytes, falling back to JSON string if failed.
     
@@ -667,32 +855,51 @@ def dumps(obj, *, skipkeys=False, ensure_ascii=True, check_circular=True,
         bytes: If `lite3` serialization succeeds.
         str: If fallback to `json.dumps` occurs.
     """
-    # Just allocate a large buffer for now - 64MB
-    cdef size_t bufsz = 1024 * 1024 * 64
+    cdef size_t bufsz = 64 * 1024
     cdef size_t used_len = 0
-    cdef bytearray buf = bytearray(bufsz)
-    cdef unsigned char* ptr = buf
+    cdef size_t max_bufsz = 1024 * 1024 * 512
+    cdef bytearray buf
+    cdef unsigned char* ptr
     
-    try:
-        if isinstance(obj, dict):
-            if lite3_init_obj(ptr, &used_len, bufsz) < 0:
-                 raise RuntimeError("Failed to init object")
-            _dumps_recursive(ptr, &used_len, 0, bufsz, obj, default)
-        elif isinstance(obj, (list, tuple)):
-            if lite3_init_arr(ptr, &used_len, bufsz) < 0:
-                 raise RuntimeError("Failed to init array")
-            _dumps_recursive(ptr, &used_len, 0, bufsz, obj, default)
-        else:
-            raise TypeError("Root object must be dict or list")
-            
-        return bytes(buf[:used_len])
-        
-    except (TypeError, RuntimeError, OverflowError, ValueError):
-        # Fallback to JSON
-        return json.dumps(obj, skipkeys=skipkeys, ensure_ascii=ensure_ascii,
-                          check_circular=check_circular, allow_nan=allow_nan,
-                          cls=cls, indent=indent, separators=separators,
-                          default=default, sort_keys=sort_keys, **kwargs)
+    while True:
+        buf = bytearray(bufsz)
+        ptr = buf
+        used_len = 0
+
+        try:
+            if isinstance(obj, dict):
+                if lite3_init_obj(ptr, &used_len, bufsz) < 0:
+                    raise RuntimeError("Failed to init object")
+                _dumps_recursive(ptr, &used_len, 0, bufsz, obj, default)
+            elif isinstance(obj, (list, tuple)):
+                if lite3_init_arr(ptr, &used_len, bufsz) < 0:
+                    raise RuntimeError("Failed to init array")
+                _dumps_recursive(ptr, &used_len, 0, bufsz, obj, default)
+            else:
+                raise TypeError("Root object must be dict or list")
+
+            return bytes(buf[:used_len])
+        except BufferError:
+            if bufsz >= max_bufsz:
+                raise
+            bufsz = bufsz * 2
+        except (TypeError, RuntimeError, OverflowError, ValueError):
+            # Fallback to JSON
+            if fallback != "json":
+                raise
+            return json.dumps(
+                obj,
+                skipkeys=skipkeys,
+                ensure_ascii=ensure_ascii,
+                check_circular=check_circular,
+                allow_nan=allow_nan,
+                cls=cls,
+                indent=indent,
+                separators=separators,
+                default=default,
+                sort_keys=sort_keys,
+                **kwargs,
+            )
 
 # Register as Mapping
 collections.abc.Mapping.register(Lite3Object)

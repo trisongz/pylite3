@@ -56,5 +56,4 @@ def loads(data: Union[bytes, str], *, recursive: bool = False, cls: Any = ..., o
 
 def dumps(obj: Any, *, skipkeys: bool = ..., ensure_ascii: bool = ..., check_circular: bool = ..., 
           allow_nan: bool = ..., cls: Any = ..., indent: Union[None, int, str] = ..., 
-          separators: Any = ..., default: Any = ..., sort_keys: bool = ..., **kwargs: Any) -> Union[bytes, str]: ...
-
+          separators: Any = ..., default: Any = ..., sort_keys: bool = ..., fallback: str = ..., **kwargs: Any) -> Union[bytes, str]: ...

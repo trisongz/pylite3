@@ -55,6 +55,12 @@ uv pip install -e .
 
 ## 🛠 Usage
 
+### Notes
+
+- `pylite3.loads(...)` expects Lite3-encoded bytes for the fast path. If the input is not valid Lite3, it falls back to `json.loads`.
+- `pylite3.dumps(...)` returns `bytes` when Lite3 serialization succeeds; otherwise it falls back to `json.dumps` and returns a `str`.
+  - Use `fallback="raise"` to disable the JSON fallback and raise instead.
+
 ### Reading Data
 
 ```python
@@ -80,6 +86,13 @@ first_two_users = obj["users"][:2]
 # Convert to standard dictionary
 user_dict = dict(obj["users"][0])  # or .as_dict()
 ```
+
+---
+
+## ✅ Compatibility
+
+- CPython 3.9+ (C extension)
+- Wheels built for Linux/macOS/Windows via GitHub Actions releases
 
 ### Writing Data
 
