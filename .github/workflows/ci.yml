@@ -84,5 +84,13 @@ jobs:
         uv pip install -e .
         uv pip install pysimdjson orjson ujson python-rapidjson cysimdjson
 
+    - name: Clone pysimdjson jsonexamples
+      run: git clone --depth 1 https://github.com/TkTech/pysimdjson.git pysimdjson
+
     - name: Run Benchmarks
-      run: uv run examples/benchmark_robustness.py
+      env:
+        JSONEXAMPLES_DIR: pysimdjson/jsonexamples
+        JSONEXAMPLES_MAX_FILES: "5"
+      run: |
+        uv run examples/benchmark_robustness.py
+        uv run examples/compare_jsons.py

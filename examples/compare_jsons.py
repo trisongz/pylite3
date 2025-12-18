@@ -201,16 +201,33 @@ def benchmark_fuzzing(runs=10):
 
 
 def main():
-    json_dir = "/Volumes/Hub/github/pysimdjson/jsonexamples"
+    json_dir = os.environ.get("JSONEXAMPLES_DIR")
+    if not json_dir:
+        repo_root = Path(__file__).resolve().parents[1]
+        candidates = [
+            repo_root / "jsonexamples",
+            repo_root / "pysimdjson" / "jsonexamples",
+        ]
+        for cand in candidates:
+            if cand.is_dir():
+                json_dir = str(cand)
+                break
+
+    if not json_dir or not Path(json_dir).is_dir():
+        print("No jsonexamples directory found. Set JSONEXAMPLES_DIR to run file benchmarks.")
+        return
+
     files = glob.glob(os.path.join(json_dir, "*.json"))
     
     # Prioritize interesting files
     priority = ['twitter.json', 'canada.json', 'citm_catalog.json']
     files.sort(key=lambda f: (os.path.basename(f) not in priority, os.path.basename(f)))
 
+    max_files = int(os.environ.get("JSONEXAMPLES_MAX_FILES", "5"))
     count = 0
     for f in files:
-        if count >= 5: break # Limit to first 5 for speed
+        if count >= max_files:
+            break  # Limit for speed
         benchmark_file(f)
         count += 1
         
