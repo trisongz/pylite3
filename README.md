@@ -41,10 +41,10 @@ Requires a C compiler and Python 3.9+.
 
 ```bash
 # Using uv (Recommended)
-uv pip install pysimdjson 
+uv pip install pylite3
 
 # Build from source
-git clone --recurse-submodules https://github.com/fastserial/pylite3.git
+git clone --recurse-submodules https://github.com/trisongz/pylite3.git
 cd pylite3
 # If you already cloned without submodules:
 git submodule update --init --recursive
